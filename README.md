@@ -1,56 +1,74 @@
-# pdq
+# pdq (cpp-packet-delivery)
 
-Small C++17 library for at-least-once packet delivery over an unreliable link.
-A background worker drains a queue, retries failed sends with exponential
-backoff, and tracks each packet through `pending -> in-flight -> delivered/failed`.
+Легковесная C++17-библиотека для надежной доставки пакетов по нестабильным каналам связи (at-least-once delivery).
 
-I pulled this out of a larger monitoring project where an agent ships telemetry
-to a backend and has to survive flaky links. Here it's trimmed down to the
-delivery part with fake transports so it builds and runs standalone.
+Фоновый рабочий поток обслуживает приоритетную очередь задач, повторно отправляет пакеты при сбоях с экспоненциальной задержкой (exponential backoff) и отслеживает жизненный цикл каждого пакета в статусах: `Pending → InFlight → Delivered / Failed`.
 
-## Build
+Механизм выделен из более крупной production-системы сбора телеметрии, где агент отправляет данные на бэкенд и должен гарантировать доставку в условиях частых разрывов соединений. В этой версии оставлено только ядро доставки с абстрактными транспортами для простоты сборки и запуска.
+
+## Сборка
+
+Для сборки проекта требуются компилятор с поддержкой C++17 и CMake 3.16+.
 
 ```sh
 cmake -S . -B build
 cmake --build build
 ctest --test-dir build --output-on-failure
-./build/pdq_demo        # optional
+./build/pdq_demo        # Запуск демонстрационного примера (опционально)
 ```
 
-C++17 and CMake 3.16+.
+## Использование
 
-## Usage
+Чтобы интегрировать библиотеку, достаточно реализовать простой интерфейс `pdq::ITransport`:
 
 ```cpp
-class MyTransport : public pdq::ITransport {
-    bool send(const pdq::Packet& p) override {
-        // push p.payload over http/socket/whatever, return true on ack
+#include "pdq/delivery_manager.hpp"
+
+class MyHttpTransport : public pdq::ITransport {
+public:
+    bool send(const pdq::Packet& packet) override {
+        // Отправка packet.payload через curl / sockets / etc.
+        // Возвращаем true только если получен положительный ACK от бэкенда.
+        return true; 
     }
 };
 
-MyTransport t;
-pdq::DeliveryManager mgr(t);
-mgr.enqueue({1, "payload"});
-mgr.wait_idle(std::chrono::seconds(5));
+int main() {
+    MyHttpTransport transport;
+    pdq::DeliveryManager manager(transport);
+
+    // Добавляем пакеты. Вызов потокобезопасен и вернет управление мгновенно.
+    manager.enqueue({1, "payload_data_1"});
+    manager.enqueue({2, "payload_data_2"});
+
+    // Блокируем поток выполнения до тех пор, пока все пакеты не доставятся
+    // или не исчерпают лимит попыток.
+    manager.wait_idle(std::chrono::seconds(5));
+    
+    return 0;
+}
 ```
 
-`send()` must return true only on a positive ack. Everything else is treated as
-a failure and retried.
+## Политика повторных попыток (Retry Policy)
 
-## Retry policy
+По умолчанию расчет задержки перед попыткой `n` происходит по формуле: `min(base_delay * multiplier^n, max_delay)`.
+Настройки по умолчанию:
+- Начальная задержка (`base_delay`): 100 мс.
+- Множитель роста (`multiplier`): 2.0.
+- Максимальный лимит (`max_delay`): 5 секунд.
+- Лимит попыток (`max_attempts`): 5.
 
-Delay before retry `n` is `min(base * multiplier^n, max)`. Defaults: base 100ms,
-multiplier 2, max 5s, 5 attempts. Override with `pdq::RetryPolicy`.
+Вы можете переопределить настройки при создании менеджера, передав структуру `pdq::RetryPolicy`.
 
-## Layout
+## Структура проекта
 
 ```
-include/pdq   headers
-src           implementation
-tests         tests + a tiny built-in harness
-examples      runnable demo
+include/pdq/   — Публичные заголовочные файлы библиотеки.
+src/           — Исходный код реализации.
+tests/         — Тесты и легковесный тестовый фреймворк (без внешних зависимостей).
+examples/      — Пример использования библиотеки.
 ```
 
-## License
+## Лицензия
 
 MIT.

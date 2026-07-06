@@ -9,7 +9,8 @@ using namespace std::chrono_literals;
 
 namespace {
 
-// Fails the first fail_n attempts per packet, then acks.
+// Имитация нестабильного сетевого транспорта (Flaky Transport).
+// Первые fail_n попыток для каждого пакета завершаются неудачей, затем отправка проходит успешно.
 class FlakyTransport : public pdq::ITransport {
 public:
     explicit FlakyTransport(int fail_n) : fail_n_(fail_n) {}
@@ -27,6 +28,7 @@ private:
     std::unordered_map<std::uint64_t, int> attempts_;
 };
 
+// Абсолютно «мертвый» транспорт (всегда возвращает ошибку).
 class DeadTransport : public pdq::ITransport {
 public:
     bool send(const pdq::Packet&) override {
@@ -36,6 +38,7 @@ public:
     std::atomic<int> calls{0};
 };
 
+// Быстрая политика ретраев для ускорения выполнения тестов.
 pdq::RetryPolicy fast_policy() {
     pdq::RetryPolicy p;
     p.base_delay = 1ms;
@@ -46,6 +49,7 @@ pdq::RetryPolicy fast_policy() {
 
 }  // namespace
 
+// Проверяем идеальный сценарий: отправка без сбоев проходит с первой попытки.
 TEST_CASE(delivers_on_first_try) {
     FlakyTransport transport(0);
     pdq::DeliveryManager mgr(transport, fast_policy());
@@ -56,8 +60,9 @@ TEST_CASE(delivers_on_first_try) {
     CHECK(transport.total_calls == 1);
 }
 
+// Тестируем повторные попытки: пакет должен пробиться через сбоящую сеть на 3-й раз.
 TEST_CASE(retries_then_succeeds) {
-    FlakyTransport transport(2);  // fails twice, acks on the 3rd
+    FlakyTransport transport(2);  // Первые две попытки ломаются, третья — успешная
     pdq::DeliveryManager mgr(transport, fast_policy());
     mgr.enqueue(pdq::Packet{42, "telemetry"});
 
@@ -71,6 +76,7 @@ TEST_CASE(retries_then_succeeds) {
     CHECK(s.attempts == 3);
 }
 
+// Убеждаемся, что при перманентном падении сети попытки прекращаются после исчерпания лимита.
 TEST_CASE(fails_after_exhausting_attempts) {
     DeadTransport transport;
     pdq::DeliveryManager mgr(transport, fast_policy());
@@ -78,11 +84,12 @@ TEST_CASE(fails_after_exhausting_attempts) {
 
     CHECK(mgr.wait_idle(1s));
     CHECK(mgr.status(7) == pdq::Status::Failed);
-    CHECK(transport.calls == 5);  // == max_attempts
+    CHECK(transport.calls == 5);  // Ожидаем ровно 5 вызовов (max_attempts)
 }
 
+// Нагрузочный тест: отправляем 200 пакетов одновременно в конкурентной среде.
 TEST_CASE(handles_many_concurrent_packets) {
-    FlakyTransport transport(1);
+    FlakyTransport transport(1); // Каждый пакет падает один раз
     pdq::DeliveryManager mgr(transport, fast_policy());
 
     constexpr int N = 200;
@@ -94,20 +101,22 @@ TEST_CASE(handles_many_concurrent_packets) {
     CHECK(s.enqueued == N);
     CHECK(s.delivered == N);
     CHECK(s.failed == 0);
-    CHECK(s.attempts == 2 * N);
+    CHECK(s.attempts == 2 * N); // 200 пакетов * 2 попытки каждый = 400 вызовов
 }
 
+// Проверяем формулу экспоненциальной задержки и ее ограничение по max_delay.
 TEST_CASE(backoff_grows_and_caps) {
     pdq::RetryPolicy p;
     p.base_delay = 100ms;
     p.max_delay = 1000ms;
     p.multiplier = 2.0;
+    
     CHECK(p.delay_for(0) == 100ms);
     CHECK(p.delay_for(1) == 200ms);
     CHECK(p.delay_for(2) == 400ms);
     CHECK(p.delay_for(3) == 800ms);
-    CHECK(p.delay_for(4) == 1000ms);
-    CHECK(p.delay_for(10) == 1000ms);
+    CHECK(p.delay_for(4) == 1000ms); // Ограничено max_delay
+    CHECK(p.delay_for(10) == 1000ms); // Тоже ограничено max_delay
 }
 
 int main() { return st::run_all(); }
