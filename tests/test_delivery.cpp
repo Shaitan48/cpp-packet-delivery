@@ -1,5 +1,6 @@
 #include <atomic>
 #include <chrono>
+#include <stdexcept>
 #include <unordered_map>
 
 #include "pdq/delivery_manager.hpp"
@@ -102,6 +103,21 @@ TEST_CASE(handles_many_concurrent_packets) {
     CHECK(s.delivered == N);
     CHECK(s.failed == 0);
     CHECK(s.attempts == 2 * N); // 200 пакетов * 2 попытки каждый = 400 вызовов
+}
+
+// enqueue() после stop() не должен молча терять пакет - он должен упасть с исключением.
+TEST_CASE(enqueue_after_stop_throws) {
+    DeadTransport transport;
+    pdq::DeliveryManager mgr(transport, fast_policy());
+    mgr.stop();
+
+    bool threw = false;
+    try {
+        mgr.enqueue(pdq::Packet{99, "too-late"});
+    } catch (const std::runtime_error&) {
+        threw = true;
+    }
+    CHECK(threw);
 }
 
 // Проверяем формулу экспоненциальной задержки и ее ограничение по max_delay.

@@ -49,6 +49,8 @@ public:
     DeliveryManager& operator=(const DeliveryManager&) = delete;
 
     // Потокобезопасно ставит пакет в очередь на отправку. Будит воркера, если тот спал.
+    // Бросает std::runtime_error, если вызвана после stop() - иначе пакет тихо
+    // осел бы в очереди навсегда, а wait_idle() ждал бы его до таймаута.
     void enqueue(Packet packet);
 
     // Возвращает текущий статус пакета по ID (Pending -> InFlight -> Delivered/Failed).

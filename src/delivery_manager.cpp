@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <stdexcept>
 
 namespace pdq {
 
@@ -30,6 +31,13 @@ DeliveryManager::~DeliveryManager() {
 void DeliveryManager::enqueue(Packet packet) {
     {
         std::lock_guard<std::mutex> lock(mtx_);
+        if (!running_.load()) {
+            // Воркер уже остановлен - без этой проверки пакет тихо оседал бы
+            // в очереди навсегда, а wait_idle() потом никогда бы не дождался.
+            // Заметил на живом агенте: shutdown гонится с последней пачкой
+            // enqueue() из другого потока, и пакет просто терялся без следа.
+            throw std::runtime_error("DeliveryManager::enqueue called after stop()");
+        }
         statuses_[packet.id] = Status::Pending;
         queue_.push(Scheduled{std::move(packet), 0,
                               std::chrono::steady_clock::now()});
