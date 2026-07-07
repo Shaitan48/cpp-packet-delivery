@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <random>
 #include <stdexcept>
 
 namespace pdq {
@@ -14,7 +15,17 @@ std::chrono::milliseconds RetryPolicy::delay_for(int attempt) const noexcept {
         static_cast<double>(base_delay.count()) * std::pow(multiplier, attempt);
     const double capped =
         std::min(scaled, static_cast<double>(max_delay.count()));
-    return std::chrono::milliseconds(static_cast<long long>(capped));
+
+    if (jitter <= 0.0) {
+        return std::chrono::milliseconds(static_cast<long long>(capped));
+    }
+
+    // rng статический на поток, чтобы не тащить его как поле и не платить
+    // за него, пока jitter не включен.
+    thread_local std::mt19937 rng{std::random_device{}()};
+    std::uniform_real_distribution<double> spread(1.0 - jitter, 1.0 + jitter);
+    const double jittered = std::max(0.0, capped * spread(rng));
+    return std::chrono::milliseconds(static_cast<long long>(jittered));
 }
 
 DeliveryManager::DeliveryManager(ITransport& transport, RetryPolicy policy)

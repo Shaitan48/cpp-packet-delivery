@@ -1,5 +1,6 @@
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <stdexcept>
 #include <unordered_map>
 
@@ -133,6 +134,28 @@ TEST_CASE(backoff_grows_and_caps) {
     CHECK(p.delay_for(3) == 800ms);
     CHECK(p.delay_for(4) == 1000ms); // Ограничено max_delay
     CHECK(p.delay_for(10) == 1000ms); // Тоже ограничено max_delay
+}
+
+
+// jitter не должен ломать формулу backoff, только разбрасывать значение
+// вокруг него в объявленных границах.
+TEST_CASE(jitter_stays_within_bounds) {
+    pdq::RetryPolicy p;
+    p.base_delay = 100ms;
+    p.max_delay = 1000ms;
+    p.multiplier = 2.0;
+    p.jitter = 0.2;
+
+    for (int attempt = 1; attempt <= 5; ++attempt) {
+        const double base = std::min(100.0 * std::pow(2.0, attempt), 1000.0);
+        const auto lo = std::chrono::milliseconds(static_cast<long long>(base * 0.8));
+        const auto hi = std::chrono::milliseconds(static_cast<long long>(base * 1.2));
+        for (int i = 0; i < 20; ++i) {
+            const auto d = p.delay_for(attempt);
+            CHECK(d >= lo);
+            CHECK(d <= hi);
+        }
+    }
 }
 
 int main() { return st::run_all(); }

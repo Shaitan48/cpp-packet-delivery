@@ -23,6 +23,7 @@ struct RetryPolicy {
     std::chrono::milliseconds base_delay{100};   // Начальная задержка перед первой повторной отправкой.
     std::chrono::milliseconds max_delay{5000};   // Верхний предел задержки (чтобы backoff не рос бесконечно).
     double multiplier = 2.0;                     // Коэффициент экспоненциального роста (умножитель для каждой попытки).
+    double jitter = 0.0;                         // Доля случайного разброса вокруг задержки (0 = выключено, детерминированный backoff).
 
     // Рассчитывает задержку для конкретной попытки: min(base_delay * multiplier^attempt, max_delay).
     std::chrono::milliseconds delay_for(int attempt) const noexcept;
