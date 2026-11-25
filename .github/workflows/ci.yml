@@ -23,3 +23,26 @@ jobs:
 
       - name: Test
         run: ctest --test-dir build --build-config Release --output-on-failure
+
+  sanitizers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure ASan + UBSan
+        run: cmake -S . -B build-asan -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -g"
+
+      - name: Build ASan + UBSan
+        run: cmake --build build-asan
+
+      - name: Test ASan + UBSan
+        run: ctest --test-dir build-asan --output-on-failure
+
+      - name: Configure TSan
+        run: cmake -S . -B build-tsan -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CXX_FLAGS="-fsanitize=thread -fno-omit-frame-pointer -g"
+
+      - name: Build TSan
+        run: cmake --build build-tsan
+
+      - name: Test TSan
+        run: ctest --test-dir build-tsan --output-on-failure

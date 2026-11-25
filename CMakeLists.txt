@@ -26,6 +26,9 @@ target_link_libraries(pdq PUBLIC Threads::Threads)
 add_executable(pdq_demo examples/demo.cpp)
 target_link_libraries(pdq_demo PRIVATE pdq)
 
+add_executable(pdq_bench benchmarks/bench_delivery.cpp)
+target_link_libraries(pdq_bench PRIVATE pdq)
+
 enable_testing()
 add_executable(pdq_tests tests/test_delivery.cpp)
 target_include_directories(pdq_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)

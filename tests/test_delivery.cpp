@@ -2,6 +2,7 @@
 #include <chrono>
 #include <cmath>
 #include <stdexcept>
+#include <thread>
 #include <unordered_map>
 
 #include "pdq/delivery_manager.hpp"
@@ -156,6 +157,92 @@ TEST_CASE(jitter_stays_within_bounds) {
             CHECK(d <= hi);
         }
     }
+}
+
+// stop() должен мгновенно будить воркер, даже если он спит на длинном backoff.
+TEST_CASE(stop_wakes_immediately_during_long_backoff) {
+    DeadTransport transport;
+    pdq::RetryPolicy p;
+    p.base_delay = 10s;
+    p.max_delay = 10s;
+    p.max_attempts = 5;
+
+    pdq::DeliveryManager mgr(transport, p);
+    mgr.enqueue(pdq::Packet{1, "slow-backoff"});
+
+    // Даем воркеру выполнить первую попытку и уйти в 10-секундный сон.
+    const auto deadline = std::chrono::steady_clock::now() + 1s;
+    while (transport.calls.load() == 0 && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(2ms);
+    }
+    CHECK(transport.calls.load() >= 1);
+
+    const auto t0 = std::chrono::steady_clock::now();
+    mgr.stop();
+    const auto elapsed = std::chrono::steady_clock::now() - t0;
+    CHECK(elapsed < 500ms);
+}
+
+// Новый пакет с более ранним сроком должен вытеснять ожидание чужого длинного backoff.
+TEST_CASE(earlier_packet_preempts_backoff_wait) {
+    class RejectIdOneTransport : public pdq::ITransport {
+    public:
+        bool send(const pdq::Packet& pkt) override {
+            if (pkt.id == 1) {
+                ++id1_calls;
+                return false;
+            }
+            return true;
+        }
+        std::atomic<int> id1_calls{0};
+    };
+
+    RejectIdOneTransport transport;
+    pdq::RetryPolicy p;
+    p.base_delay = 5s;
+    p.max_delay = 5s;
+    p.max_attempts = 3;
+
+    pdq::DeliveryManager mgr(transport, p);
+    mgr.enqueue(pdq::Packet{1, "fails-into-backoff"});
+
+    const auto deadline = std::chrono::steady_clock::now() + 1s;
+    while (transport.id1_calls.load() == 0 && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(2ms);
+    }
+    CHECK(transport.id1_calls.load() >= 1);
+
+    const auto t0 = std::chrono::steady_clock::now();
+    mgr.enqueue(pdq::Packet{2, "urgent"});
+    const auto poll_end = std::chrono::steady_clock::now() + 500ms;
+    while (mgr.status(2) != pdq::Status::Delivered && std::chrono::steady_clock::now() < poll_end) {
+        std::this_thread::sleep_for(2ms);
+    }
+    const auto elapsed = std::chrono::steady_clock::now() - t0;
+    CHECK(mgr.status(2) == pdq::Status::Delivered);
+    CHECK(elapsed < 500ms);
+    mgr.stop();
+}
+
+// Проверяем ограничение размера карты финальных статусов для долгих сессий 24/7.
+TEST_CASE(bounds_terminal_status_history) {
+    FlakyTransport transport(0);
+    pdq::RetryPolicy p = fast_policy();
+    p.max_status_history = 5;
+
+    pdq::DeliveryManager mgr(transport, p);
+    for (std::uint64_t i = 1; i <= 20; ++i) {
+        mgr.enqueue(pdq::Packet{i, "p"});
+    }
+    CHECK(mgr.wait_idle(2s));
+
+    int kept = 0;
+    for (std::uint64_t i = 1; i <= 20; ++i) {
+        if (mgr.status(i).has_value()) ++kept;
+    }
+    CHECK(kept == 5);
+    CHECK(!mgr.status(1).has_value());
+    CHECK(mgr.status(20) == pdq::Status::Delivered);
 }
 
 int main() { return st::run_all(); }

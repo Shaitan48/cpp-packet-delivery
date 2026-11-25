@@ -77,11 +77,31 @@ Stats DeliveryManager::stats() const {
 }
 
 void DeliveryManager::stop() {
-    // exchange гарантирует атомарный сброс флага и предотвращает двойной вызов cv.notify/thread.join.
-    if (!running_.exchange(false)) return; 
-    
+    {
+        // Меняем флаг под мьютексом, чтобы исключить гонку lost-wakeup между
+        // проверкой условия и входом воркера в cv_.wait_until().
+        std::lock_guard<std::mutex> lock(mtx_);
+        if (!running_.exchange(false)) return;
+    }
+
     cv_.notify_all(); // Будим воркера, чтобы он вышел из цикла
     if (worker_.joinable()) worker_.join();
+}
+
+void DeliveryManager::record_terminal_status(std::uint64_t id, Status st) {
+    statuses_[id] = st;
+    if (policy_.max_status_history == 0) return;
+
+    terminal_ids_.push_back(id);
+    while (statuses_.size() > policy_.max_status_history && !terminal_ids_.empty()) {
+        const std::uint64_t oldest_id = terminal_ids_.front();
+        terminal_ids_.pop_front();
+        const auto it = statuses_.find(oldest_id);
+        if (it != statuses_.end() &&
+            (it->second == Status::Delivered || it->second == Status::Failed)) {
+            statuses_.erase(it);
+        }
+    }
 }
 
 void DeliveryManager::run() {
@@ -96,8 +116,11 @@ void DeliveryManager::run() {
         const auto due = queue_.top().due;
         const auto now = std::chrono::steady_clock::now();
         if (due > now) {
-            // Если время отправки верхнего пакета еще не пришло, засыпаем на разницу во времени
-            cv_.wait_until(lock, due);
+            // Ждем наступления due, но немедленно просыпаемся при stop()
+            // или появлении в очереди нового пакета с более ранним сроком.
+            cv_.wait_until(lock, due, [this, due] {
+                return !running_.load() || queue_.empty() || queue_.top().due < due;
+            });
             continue;
         }
 
@@ -119,7 +142,7 @@ void DeliveryManager::run() {
         ++stats_.attempts;
 
         if (acked) {
-            statuses_[item.packet.id] = Status::Delivered;
+            record_terminal_status(item.packet.id, Status::Delivered);
             ++stats_.delivered;
             // Если это был последний обрабатываемый пакет, будим потоки, ждущие в wait_idle()
             if (outstanding_ > 0 && --outstanding_ == 0) cv_.notify_all();
@@ -129,7 +152,7 @@ void DeliveryManager::run() {
         // Обработка неудачной попытки отправки
         const int next_attempt = item.attempt + 1;
         if (next_attempt >= policy_.max_attempts) {
-            statuses_[item.packet.id] = Status::Failed;
+            record_terminal_status(item.packet.id, Status::Failed);
             ++stats_.failed;
             if (outstanding_ > 0 && --outstanding_ == 0) cv_.notify_all();
             continue;

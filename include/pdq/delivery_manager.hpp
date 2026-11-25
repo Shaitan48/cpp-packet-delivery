@@ -3,7 +3,9 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <mutex>
 #include <optional>
@@ -24,6 +26,7 @@ struct RetryPolicy {
     std::chrono::milliseconds max_delay{5000};   // Верхний предел задержки (чтобы backoff не рос бесконечно).
     double multiplier = 2.0;                     // Коэффициент экспоненциального роста (умножитель для каждой попытки).
     double jitter = 0.0;                         // Доля случайного разброса вокруг задержки (0 = выключено, детерминированный backoff).
+    std::size_t max_status_history = 10000;      // Лимит записей в таблице статусов (0 = без ограничения); старые terminal-статусы вытесняются.
 
     // Рассчитывает задержку для конкретной попытки: min(base_delay * multiplier^attempt, max_delay).
     std::chrono::milliseconds delay_for(int attempt) const noexcept;
@@ -83,6 +86,9 @@ private:
     // Основной цикл воркера, работающий в фоновом потоке.
     void run();
 
+    // Фиксирует финальный статус пакета (Delivered/Failed) и ограничивает размер истории.
+    void record_terminal_status(std::uint64_t id, Status st);
+
     ITransport& transport_;
     RetryPolicy policy_;
 
@@ -91,6 +97,7 @@ private:
     
     std::priority_queue<Scheduled, std::vector<Scheduled>, std::greater<>> queue_;
     std::unordered_map<std::uint64_t, Status> statuses_;
+    std::deque<std::uint64_t> terminal_ids_;
     
     std::size_t outstanding_ = 0; // Число пакетов, находящихся в процессе обработки (Pending / InFlight).
     Stats stats_;
