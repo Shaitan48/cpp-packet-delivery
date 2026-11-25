@@ -1,5 +1,8 @@
 # pdq (cpp-packet-delivery)
 
+[![CI](https://github.com/Shaitan48/cpp-packet-delivery/actions/workflows/ci.yml/badge.svg)](https://github.com/Shaitan48/cpp-packet-delivery/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+
 Легковесная C++17-библиотека для надежной доставки пакетов по нестабильным каналам связи (at-least-once delivery).
 
 Фоновый рабочий поток обслуживает приоритетную очередь задач, повторно отправляет пакеты при сбоях с экспоненциальной задержкой (exponential backoff) и отслеживает жизненный цикл каждого пакета в статусах: `Pending → InFlight → Delivered / Failed`.
